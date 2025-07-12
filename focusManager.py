@@ -225,6 +225,7 @@ class FocusTreeApp:
 
         self.create_menu()
         self.create_widgets()
+        self.create_context_menu() # コンテキストメニューを作成
 
         self.draw_tree()
 
@@ -285,11 +286,18 @@ class FocusTreeApp:
         self.canvas.bind("<Button-1>", self.on_canvas_click)
         self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
-        self.canvas.bind("<Button-3>", self.on_canvas_right_click) # 右クリック
+        # 右クリックイベントを更新
+        self.canvas.bind("<Button-3>", self.on_canvas_right_click) 
         self.canvas.bind("<Double-Button-1>", self.on_canvas_double_click) # ダブルクリック
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel) # マウスホイールイベント
 
         self.drag_data = {"x": 0, "y": 0, "item": None}
+
+    def create_context_menu(self):
+        """右クリックメニューを作成する"""
+        self.context_menu = tk.Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="国家方針を編集", command=self.edit_selected_node)
+        self.context_menu.add_command(label="国家方針を削除", command=self.delete_selected_node)
 
     def on_mouse_wheel(self, event):
         """マウスホイールによるズームイン・アウト"""
@@ -330,8 +338,33 @@ class FocusTreeApp:
         pass
 
     def on_canvas_right_click(self, event):
-        """キャンバスの右クリックイベント（画面スクロール）"""
-        self.canvas.scan_mark(event.x, event.y)
+        """キャンバスの右クリックイベント（ノード選択とコンテキストメニュー表示）"""
+        # クリックされたアイテムを特定
+        # 検出範囲をNODE_RADIUS程度に広げることで、クリックの精度を向上させる
+        # ズームレベルも考慮に入れる
+        detection_radius = NODE_RADIUS * self.zoom_level
+        clicked_items = self.canvas.find_overlapping(
+            event.x - detection_radius, event.y - detection_radius,
+            event.x + detection_radius, event.y + detection_radius
+        )
+        node_id = None
+        for item in clicked_items:
+            tags = self.canvas.gettags(item)
+            # タグがタプルであることを確認し、"node"タグとIDタグをチェック
+            if isinstance(tags, tuple) and "node" in tags and len(tags) > 1:
+                node_id = tags[1] 
+                break
+        
+        if node_id:
+            self.select_node(node_id) # ノードを選択状態にする
+            try:
+                self.context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.context_menu.grab_release()
+        else:
+            # ノード以外が右クリックされた場合は、通常の画面スクロールモード
+            self.canvas.scan_mark(event.x, event.y)
+
 
     def on_canvas_double_click(self, event):
         """キャンバスのダブルクリックで編集"""
@@ -359,10 +392,16 @@ class FocusTreeApp:
             self.status_label.config(text=f"選択中: {self.selected_node_id}")
             self.edit_menu.entryconfig("選択中の国家方針を編集", state=tk.NORMAL)
             self.edit_menu.entryconfig("選択中の国家方針を削除", state=tk.NORMAL)
+            # コンテキストメニューの項目も有効化
+            self.context_menu.entryconfig("国家方針を編集", state=tk.NORMAL)
+            self.context_menu.entryconfig("国家方針を削除", state=tk.NORMAL)
         else:
             self.status_label.config(text="準備完了")
             self.edit_menu.entryconfig("選択中の国家方針を編集", state=tk.DISABLED)
             self.edit_menu.entryconfig("選択中の国家方針を削除", state=tk.DISABLED)
+            # コンテキストメニューの項目も無効化
+            self.context_menu.entryconfig("国家方針を編集", state=tk.DISABLED)
+            self.context_menu.entryconfig("国家方針を削除", state=tk.DISABLED)
 
 
     def add_focus_node(self):
@@ -379,6 +418,7 @@ class FocusTreeApp:
     def edit_selected_node(self):
         """選択中のノードを編集する"""
         if not self.selected_node_id:
+            # messagebox.showinfo("情報", "編集する国家方針を選択してください。") # 右クリックメニューで制御されるため不要
             return
         
         node_to_edit = self.focus_nodes[self.selected_node_id]
@@ -400,16 +440,20 @@ class FocusTreeApp:
                         node.prerequisite = [new_id if p == old_id else p for p in node.prerequisite]
 
                 del self.focus_nodes[self.selected_node_id]
-                self.select_node(None)
+                self.select_node(None) # IDが変わったので選択を解除し、新しいIDで再選択されるようにする
 
             updated_node = FocusNode(editor.result)
             self.focus_nodes[updated_node.id] = updated_node
             self.draw_tree()
             self.status_label.config(text=f"'{updated_node.id}' を更新しました。")
+            # 編集後に新しいノードが選択状態になるようにする
+            self.select_node(updated_node.id)
+
 
     def delete_selected_node(self):
         """選択中のノードを削除する"""
         if not self.selected_node_id:
+            # messagebox.showinfo("情報", "削除する国家方針を選択してください。") # 右クリックメニューで制御されるため不要
             return
 
         if messagebox.askyesno("確認", f"国家方針 '{self.selected_node_id}' を削除しますか？\nこの操作は元に戻せません。"):

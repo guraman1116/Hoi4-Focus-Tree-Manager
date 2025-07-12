@@ -85,12 +85,14 @@ class FocusNode:
 
 class FocusEditorWindow(Toplevel):
     """国家方針の情報を編集するためのウィンドウ"""
-    def __init__(self, parent, focus_node=None, existing_ids=None):
+    def __init__(self, parent, focus_node=None, existing_ids=None, initial_x=0, initial_y=0):
         super().__init__(parent)
         self.parent = parent
         self.focus_node = focus_node
         self.existing_ids = existing_ids if existing_ids else []
         self.original_id = focus_node.id if focus_node else None
+        self.initial_x = initial_x
+        self.initial_y = initial_y
 
         self.title("国家方針の編集" if focus_node else "新規国家方針の作成")
         self.geometry("600x700")
@@ -101,6 +103,9 @@ class FocusEditorWindow(Toplevel):
         self.create_widgets()
         if self.focus_node:
             self.load_data()
+        else: # 新規作成の場合のみ初期座標をセット
+            self.x_var.set(self.initial_x)
+            self.y_var.set(self.initial_y)
 
     def create_widgets(self):
         """ウィジェットを作成し配置する"""
@@ -222,10 +227,12 @@ class FocusTreeApp:
         self.focus_nodes = {}  # {id: FocusNode}
         self.selected_node_id = None
         self.zoom_level = 1.0 # ズームレベルの初期値
+        self.last_right_click_canvas_x = 0 # 右クリックされたキャンバスX座標
+        self.last_right_click_canvas_y = 0 # 右クリックされたキャンバスY座標
 
         self.create_menu()
         self.create_widgets()
-        self.create_context_menu() # コンテキストメニューを作成
+        self.create_context_menus() # コンテキストメニューを作成
 
         self.draw_tree()
 
@@ -286,18 +293,23 @@ class FocusTreeApp:
         self.canvas.bind("<Button-1>", self.on_canvas_click)
         self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
-        # 右クリックイベントを更新
         self.canvas.bind("<Button-3>", self.on_canvas_right_click) 
         self.canvas.bind("<Double-Button-1>", self.on_canvas_double_click) # ダブルクリック
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel) # マウスホイールイベント
 
         self.drag_data = {"x": 0, "y": 0, "item": None}
 
-    def create_context_menu(self):
-        """右クリックメニューを作成する"""
-        self.context_menu = tk.Menu(self.root, tearoff=0)
-        self.context_menu.add_command(label="国家方針を編集", command=self.edit_selected_node)
-        self.context_menu.add_command(label="国家方針を削除", command=self.delete_selected_node)
+    def create_context_menus(self):
+        """右クリックメニューを作成する (ノード用とキャンバス用)"""
+        # ノード用のコンテキストメニュー
+        self.node_context_menu = tk.Menu(self.root, tearoff=0)
+        self.node_context_menu.add_command(label="国家方針を編集", command=self.edit_selected_node)
+        self.node_context_menu.add_command(label="国家方針を削除", command=self.delete_selected_node)
+
+        # キャンバス空き領域用のコンテキストメニュー
+        self.canvas_context_menu = tk.Menu(self.root, tearoff=0)
+        self.canvas_context_menu.add_command(label="国家方針を追加", command=self.add_focus_node_at_clicked_position)
+
 
     def on_mouse_wheel(self, event):
         """マウスホイールによるズームイン・アウト"""
@@ -355,15 +367,22 @@ class FocusTreeApp:
                 node_id = tags[1] 
                 break
         
+        # 右クリックされたキャンバス座標を保存
+        self.last_right_click_canvas_x = event.x
+        self.last_right_click_canvas_y = event.y
+
         if node_id:
             self.select_node(node_id) # ノードを選択状態にする
             try:
-                self.context_menu.tk_popup(event.x_root, event.y_root)
+                self.node_context_menu.tk_popup(event.x_root, event.y_root)
             finally:
-                self.context_menu.grab_release()
+                self.node_context_menu.grab_release()
         else:
-            # ノード以外が右クリックされた場合は、通常の画面スクロールモード
-            self.canvas.scan_mark(event.x, event.y)
+            # ノード以外が右クリックされた場合は、キャンバス用のコンテキストメニューを表示
+            try:
+                self.canvas_context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.canvas_context_menu.grab_release()
 
 
     def on_canvas_double_click(self, event):
@@ -392,20 +411,21 @@ class FocusTreeApp:
             self.status_label.config(text=f"選択中: {self.selected_node_id}")
             self.edit_menu.entryconfig("選択中の国家方針を編集", state=tk.NORMAL)
             self.edit_menu.entryconfig("選択中の国家方針を削除", state=tk.NORMAL)
-            # コンテキストメニューの項目も有効化
-            self.context_menu.entryconfig("国家方針を編集", state=tk.NORMAL)
-            self.context_menu.entryconfig("国家方針を削除", state=tk.NORMAL)
+            # ノード用コンテキストメニューの項目も有効化
+            self.node_context_menu.entryconfig("国家方針を編集", state=tk.NORMAL)
+            self.node_context_menu.entryconfig("国家方針を削除", state=tk.NORMAL)
         else:
             self.status_label.config(text="準備完了")
             self.edit_menu.entryconfig("選択中の国家方針を編集", state=tk.DISABLED)
             self.edit_menu.entryconfig("選択中の国家方針を削除", state=tk.DISABLED)
-            # コンテキストメニューの項目も無効化
-            self.context_menu.entryconfig("国家方針を編集", state=tk.DISABLED)
-            self.context_menu.entryconfig("国家方針を削除", state=tk.DISABLED)
+            # ノード用コンテキストメニューの項目も無効化
+            self.node_context_menu.entryconfig("国家方針を編集", state=tk.DISABLED)
+            self.node_context_menu.entryconfig("国家方針を削除", state=tk.DISABLED)
 
 
     def add_focus_node(self):
-        """国家方針追加ウィンドウを開く"""
+        """国家方針追加ウィンドウを開く (ツールバーボタン用)"""
+        # デフォルトのx, yは0で開く
         editor = FocusEditorWindow(self.root, existing_ids=list(self.focus_nodes.keys()))
         self.root.wait_window(editor)
 
@@ -414,25 +434,80 @@ class FocusTreeApp:
             self.focus_nodes[new_node.id] = new_node
             self.draw_tree()
             self.status_label.config(text=f"'{new_node.id}' を追加しました。")
+            self.select_node(new_node.id) # 新規作成後、選択状態にする
+
+    def add_focus_node_at_clicked_position(self):
+        """右クリックされた座標に新しい国家方針を作成する"""
+        # キャンバス座標を論理座標に変換
+        # canvasx/canvasyはスクロールやズームを考慮した内部座標を返す
+        logical_x_px = self.canvas.canvasx(self.last_right_click_canvas_x)
+        logical_y_px = self.canvas.canvasy(self.last_right_click_canvas_y)
+
+        # 論理座標をグリッド座標に変換 (GRID_SIZEで割る)
+        # HoI4のx, yは整数なので、round()で丸める
+        initial_x = round(logical_x_px / GRID_SIZE)
+        initial_y = round(logical_y_px / GRID_SIZE)
+
+        editor = FocusEditorWindow(self.root, existing_ids=list(self.focus_nodes.keys()),
+                                   initial_x=initial_x, initial_y=initial_y)
+        self.root.wait_window(editor)
+
+        if editor.result:
+            new_node = FocusNode(editor.result)
+            self.focus_nodes[new_node.id] = new_node
+            self.draw_tree()
+            self.status_label.config(text=f"'{new_node.id}' を追加しました。")
+            self.select_node(new_node.id) # 新規作成後、選択状態にする
+
 
     def edit_selected_node(self):
         """選択中のノードを編集する"""
         if not self.selected_node_id:
-            # messagebox.showinfo("情報", "編集する国家方針を選択してください。") # 右クリックメニューで制御されるため不要
             return
         
         node_to_edit = self.focus_nodes[self.selected_node_id]
         existing_ids = list(self.focus_nodes.keys())
+
+        # 編集前のノードの絶対座標を保存
+        # calculate_positionsを呼び出すことで、最新のabs_x, abs_yが保証される
+        self.calculate_positions() 
+        original_abs_x = node_to_edit.abs_x
+        original_abs_y = node_to_edit.abs_y
+        original_relative_position_id = node_to_edit.relative_position_id
         
         editor = FocusEditorWindow(self.root, focus_node=node_to_edit, existing_ids=existing_ids)
         self.root.wait_window(editor)
 
         if editor.result:
+            new_id = editor.result['id']
+            new_relative_position_id = editor.result['relative_position_id']
+            
+            # relative_position_idが変更された場合、x, yを調整
+            if new_relative_position_id != original_relative_position_id:
+                # 新しい親ノードの絶対座標を取得
+                new_parent_abs_x = 0
+                new_parent_abs_y = 0
+                if new_relative_position_id and new_relative_position_id in self.focus_nodes:
+                    # 新しい親のabs_x, abs_yも最新であることを保証するため、再度計算
+                    # (editor.resultが返ってきた後、ツリーの状態が変わっている可能性もあるため)
+                    self.calculate_positions() 
+                    new_parent_node = self.focus_nodes[new_relative_position_id]
+                    new_parent_abs_x = new_parent_node.abs_x
+                    new_parent_abs_y = new_parent_node.abs_y
+                
+                # 新しいx, y座標を計算
+                # (元の絶対座標 - 新しい親の絶対座標) / GRID_SIZE
+                # HoI4のx, yは整数なので、round()で丸める
+                adjusted_x = round((original_abs_x - new_parent_abs_x) / GRID_SIZE)
+                adjusted_y = round((original_abs_y - new_parent_abs_y) / GRID_SIZE)
+                
+                editor.result['x'] = adjusted_x
+                editor.result['y'] = adjusted_y
+
             # IDが変更された場合は辞書キーも変更
-            if self.selected_node_id != editor.result['id']:
+            if self.selected_node_id != new_id:
                 # 他のノードの参照も更新
                 old_id = self.selected_node_id
-                new_id = editor.result['id']
                 for node in self.focus_nodes.values():
                     if node.relative_position_id == old_id:
                         node.relative_position_id = new_id
@@ -440,7 +515,7 @@ class FocusTreeApp:
                         node.prerequisite = [new_id if p == old_id else p for p in node.prerequisite]
 
                 del self.focus_nodes[self.selected_node_id]
-                self.select_node(None) # IDが変わったので選択を解除し、新しいIDで再選択されるようにする
+                self.selected_node_id = None # 選択を解除 (新しいIDで再選択されるため)
 
             updated_node = FocusNode(editor.result)
             self.focus_nodes[updated_node.id] = updated_node
@@ -453,7 +528,6 @@ class FocusTreeApp:
     def delete_selected_node(self):
         """選択中のノードを削除する"""
         if not self.selected_node_id:
-            # messagebox.showinfo("情報", "削除する国家方針を選択してください。") # 右クリックメニューで制御されるため不要
             return
 
         if messagebox.askyesno("確認", f"国家方針 '{self.selected_node_id}' を削除しますか？\nこの操作は元に戻せません。"):

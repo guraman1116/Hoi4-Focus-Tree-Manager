@@ -99,6 +99,7 @@ class FocusEditorWindow(Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
         self.result = None
+        self.prereq_vars = {} # チェックボックスのBooleanVarを格納する辞書
 
         self.create_widgets()
         if self.focus_node:
@@ -142,18 +143,43 @@ class FocusEditorWindow(Toplevel):
         ttk.Label(pos_frame, text="y:").pack(side=tk.LEFT)
         ttk.Spinbox(pos_frame, from_=-50, to=50, textvariable=self.y_var, width=5).pack(side=tk.LEFT, padx=5)
 
-        # --- Prerequisite ---
+        # --- Prerequisite (チェックボックス形式に変更) ---
         ttk.Label(main_frame, text="前提条件 (prerequisite):").grid(row=4, column=0, sticky="w", pady=5)
-        prereq_frame = ttk.Frame(main_frame)
-        prereq_frame.grid(row=5, column=0, columnspan=3, sticky="nsew")
-        self.prereq_listbox = tk.Listbox(prereq_frame, selectmode=tk.MULTIPLE, height=6)
+        
+        prereq_outer_frame = ttk.Frame(main_frame)
+        prereq_outer_frame.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        main_frame.rowconfigure(5, weight=1) # この行が拡張できるように設定
+
+        # スクロール可能な領域のためのCanvasを作成
+        self.prereq_canvas = tk.Canvas(prereq_outer_frame, borderwidth=1, relief="sunken", background="#ffffff")
+        self.prereq_canvas.pack(side="left", fill="both", expand=True)
+
+        # Canvasにスクロールバーを追加
+        prereq_scrollbar = ttk.Scrollbar(prereq_outer_frame, orient="vertical", command=self.prereq_canvas.yview)
+        prereq_scrollbar.pack(side="right", fill="y")
+
+        # Canvasにスクロールバーを設定
+        self.prereq_canvas.configure(yscrollcommand=prereq_scrollbar.set)
+        # Canvasのサイズ変更時にスクロール領域を更新
+        self.prereq_canvas.bind('<Configure>', lambda e: self.prereq_canvas.configure(scrollregion = self.prereq_canvas.bbox("all")))
+
+        # チェックボックスを保持するためのFrameをCanvas内に作成
+        self.prereq_inner_frame = ttk.Frame(self.prereq_canvas)
+        # Canvas内にFrameを配置
+        self.prereq_canvas.create_window((0, 0), window=self.prereq_inner_frame, anchor="nw")
+
         prereq_ids = [fid for fid in self.existing_ids if fid != self.original_id]
-        for fid in prereq_ids:
-            self.prereq_listbox.insert(tk.END, fid)
-        self.prereq_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        prereq_scrollbar = ttk.Scrollbar(prereq_frame, orient=tk.VERTICAL, command=self.prereq_listbox.yview)
-        prereq_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.prereq_listbox.config(yscrollcommand=prereq_scrollbar.set)
+        prereq_ids.sort() # IDをソートして表示順を安定させる
+
+        for i, fid in enumerate(prereq_ids):
+            var = tk.BooleanVar(value=False)
+            cb = ttk.Checkbutton(self.prereq_inner_frame, text=fid, variable=var)
+            cb.grid(row=i, column=0, sticky="w", padx=2, pady=1)
+            self.prereq_vars[fid] = var
+
+        # 全てのウィジェット作成後、スクロール領域を更新
+        self.prereq_inner_frame.update_idletasks()
+        self.prereq_canvas.config(scrollregion=self.prereq_canvas.bbox("all"))
 
         # --- Completion Reward ---
         ttk.Label(main_frame, text="達成時効果 (completion_reward):").grid(row=6, column=0, sticky="w", pady=5)
@@ -183,10 +209,12 @@ class FocusEditorWindow(Toplevel):
         self.y_var.set(self.focus_node.y)
         self.reward_text.insert("1.0", self.focus_node.completion_reward)
 
-        # 前提条件の選択状態を復元
-        for i, item in enumerate(self.prereq_listbox.get(0, tk.END)):
-            if item in self.focus_node.prerequisite:
-                self.prereq_listbox.selection_set(i)
+        # 前提条件の選択状態を復元 (チェックボックス用)
+        for fid, var in self.prereq_vars.items():
+            if fid in self.focus_node.prerequisite:
+                var.set(True)
+            else:
+                var.set(False) # 明示的にFalseを設定
 
     def save(self):
         """入力されたデータを検証して保存する"""
@@ -198,8 +226,11 @@ class FocusEditorWindow(Toplevel):
             messagebox.showerror("エラー", f"ID '{focus_id}' は既に使用されています。")
             return
 
-        selected_indices = self.prereq_listbox.curselection()
-        prerequisites = [self.prereq_listbox.get(i) for i in selected_indices]
+        # チェックボックスから前提条件を取得
+        prerequisites = []
+        for fid, var in self.prereq_vars.items():
+            if var.get():
+                prerequisites.append(fid)
 
         data = {
             "id": focus_id,
@@ -223,18 +254,36 @@ class FocusTreeApp:
         self.root = root
         self.root.title("HoI4 国家方針ツリー作成ツール")
         self.root.geometry("1024x768")
+        # ウィンドウを閉じる際のプロトコルを設定
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         self.focus_nodes = {}  # {id: FocusNode}
         self.selected_node_id = None
         self.zoom_level = 1.0 # ズームレベルの初期値
         self.last_right_click_canvas_x = 0 # 右クリックされたキャンバスX座標
         self.last_right_click_canvas_y = 0 # 右クリックされたキャンバスY座標
+        self.is_dirty = False # 未保存の変更があるかどうかのフラグ
 
         self.create_menu()
         self.create_widgets()
         self.create_context_menus() # コンテキストメニューを作成
 
         self.draw_tree()
+
+    def on_closing(self):
+        """ウィンドウを閉じる際の確認ダイアログを表示する"""
+        if self.is_dirty:
+            response = messagebox.askyesnocancel("終了の確認", "未保存の変更があります。保存しますか？")
+            if response is True:  # はい
+                save_successful = self.save_file()
+                if save_successful: # 保存が成功した場合のみウィンドウを閉じる
+                    self.root.destroy()
+                # else: 保存がキャンセルされたかエラーが発生した場合はウィンドウを閉じない
+            elif response is False: # いいえ (保存せずに終了)
+                self.root.destroy()
+            # else: response is None (キャンセル), 何もせずウィンドウを閉じない
+        else:
+            self.root.destroy() # 未保存の変更がなければ直接閉じる
 
     def create_menu(self):
         """メニューバーを作成する"""
@@ -435,6 +484,7 @@ class FocusTreeApp:
             self.draw_tree()
             self.status_label.config(text=f"'{new_node.id}' を追加しました。")
             self.select_node(new_node.id) # 新規作成後、選択状態にする
+            self.is_dirty = True # 変更があったことをマーク
 
     def add_focus_node_at_clicked_position(self):
         """右クリックされた座標に新しい国家方針を作成する"""
@@ -458,6 +508,7 @@ class FocusTreeApp:
             self.draw_tree()
             self.status_label.config(text=f"'{new_node.id}' を追加しました。")
             self.select_node(new_node.id) # 新規作成後、選択状態にする
+            self.is_dirty = True # 変更があったことをマーク
 
 
     def edit_selected_node(self):
@@ -521,8 +572,8 @@ class FocusTreeApp:
             self.focus_nodes[updated_node.id] = updated_node
             self.draw_tree()
             self.status_label.config(text=f"'{updated_node.id}' を更新しました。")
-            # 編集後に新しいノードが選択状態になるようにする
-            self.select_node(updated_node.id)
+            self.select_node(updated_node.id) # 編集後に新しいノードが選択状態になるようにする
+            self.is_dirty = True # 変更があったことをマーク
 
 
     def delete_selected_node(self):
@@ -544,6 +595,7 @@ class FocusTreeApp:
             
             self.draw_tree()
             self.status_label.config(text=f"'{deleted_id}' を削除しました。")
+            self.is_dirty = True # 変更があったことをマーク
 
 
     def calculate_positions(self):
@@ -655,11 +707,14 @@ class FocusTreeApp:
 
     def new_file(self):
         """データを初期化する"""
-        if messagebox.askyesno("確認", "現在のツリーを破棄して新規作成しますか？"):
-            self.focus_nodes.clear()
-            self.select_node(None)
-            self.draw_tree()
-            self.status_label.config(text="新規ファイルを作成しました。")
+        if self.is_dirty and not messagebox.askyesno("確認", "未保存の変更があります。現在のツリーを破棄して新規作成しますか？"):
+            return
+
+        self.focus_nodes.clear()
+        self.select_node(None)
+        self.draw_tree()
+        self.status_label.config(text="新規ファイルを作成しました。")
+        self.is_dirty = False # 新規作成で状態をクリーンに
 
     def save_file(self):
         """現在のツリーをJSONファイルに保存する"""
@@ -668,18 +723,24 @@ class FocusTreeApp:
             filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
         )
         if not filepath:
-            return
+            return False # ユーザーが保存をキャンセルした
 
         try:
             data_to_save = {node_id: node.to_dict() for node_id, node in self.focus_nodes.items()}
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data_to_save, f, indent=4, ensure_ascii=False)
             self.status_label.config(text=f"ファイルに保存しました: {filepath}")
+            self.is_dirty = False # 保存後、状態をクリーンに
+            return True # 保存成功
         except Exception as e:
             messagebox.showerror("保存エラー", f"ファイルの保存中にエラーが発生しました:\n{e}")
+            return None # エラー発生
 
     def open_file(self):
         """JSONファイルからツリーを読み込む"""
+        if self.is_dirty and not messagebox.askyesno("確認", "未保存の変更があります。現在のツリーを破棄してファイルを開きますか？"):
+            return
+
         filepath = filedialog.askopenfilename(
             filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
         )
@@ -697,6 +758,7 @@ class FocusTreeApp:
             self.select_node(None)
             self.draw_tree()
             self.status_label.config(text=f"ファイルを開きました: {filepath}")
+            self.is_dirty = False # ファイルを開いたので状態をクリーンに
         except Exception as e:
             messagebox.showerror("読み込みエラー", f"ファイルの読み込み中にエラーが発生しました:\n{e}")
 
@@ -830,7 +892,7 @@ class FocusTreeApp:
 
     def import_hoi4_txt(self):
         """Hoi4の.txtファイルをインポートする"""
-        if self.focus_nodes and not messagebox.askyesno("確認", "現在のツリーは破棄されます。よろしいですか？"):
+        if self.is_dirty and not messagebox.askyesno("確認", "未保存の変更があります。現在のツリーを破棄してインポートしますか？"):
             return
 
         filepath = filedialog.askopenfilename(
@@ -853,6 +915,7 @@ class FocusTreeApp:
             self.select_node(None)
             self.draw_tree()
             self.status_label.config(text=f"TXTファイルをインポートしました: {filepath}")
+            self.is_dirty = False # インポートしたので状態をクリーンに
 
         except Exception as e:
             messagebox.showerror("インポートエラー", f"ファイルの読み込みまたは解析中にエラーが発生しました:\n{e}")
@@ -876,6 +939,8 @@ class FocusTreeApp:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(script_string)
             self.status_label.config(text=f"TXTファイルにエクスポートしました: {filepath}")
+            # エクスポートは保存ではないので dirty フラグは変更しない
+            # self.is_dirty = False # エクスポートは保存ではないので状態は変更しない
         except Exception as e:
             messagebox.showerror("エクスポートエラー", f"ファイルの保存中にエラーが発生しました:\n{e}")
 

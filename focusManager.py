@@ -400,13 +400,16 @@ class FocusTreeApp:
 
     def on_canvas_right_click(self, event):
         """キャンバスの右クリックイベント（ノード選択とコンテキストメニュー表示）"""
-        # クリックされたアイテムを特定
+        # クリックされたキャンバス座標を論理座標に変換
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
+
         # 検出範囲をNODE_RADIUS程度に広げることで、クリックの精度を向上させる
         # ズームレベルも考慮に入れる
         detection_radius = NODE_RADIUS * self.zoom_level
         clicked_items = self.canvas.find_overlapping(
-            event.x - detection_radius, event.y - detection_radius,
-            event.x + detection_radius, event.y + detection_radius
+            canvas_x - detection_radius, canvas_y - detection_radius,
+            canvas_x + detection_radius, canvas_y + detection_radius
         )
         node_id = None
         for item in clicked_items:
@@ -416,9 +419,9 @@ class FocusTreeApp:
                 node_id = tags[1] 
                 break
         
-        # 右クリックされたキャンバス座標を保存
-        self.last_right_click_canvas_x = event.x
-        self.last_right_click_canvas_y = event.y
+        # 右クリックされたキャンバス座標（変換後の論理座標）を保存
+        self.last_right_click_canvas_x = canvas_x 
+        self.last_right_click_canvas_y = canvas_y 
 
         if node_id:
             self.select_node(node_id) # ノードを選択状態にする
@@ -441,22 +444,28 @@ class FocusTreeApp:
 
     def select_node(self, node_id):
         """指定されたIDのノードを選択状態にする"""
-        if self.selected_node_id == node_id:
-            return
-
-        # 前に選択されていたノードを通常色に戻す
+        # 以前に選択されていたノードのハイライトを解除
         if self.selected_node_id:
-            item = self.canvas.find_withtag(self.selected_node_id)
-            if item:
-                self.canvas.itemconfig(item, fill=NODE_COLOR)
+            # find_withtagはタプルを返すので、各アイテムIDに対して処理を行う
+            items_to_unhighlight = self.canvas.find_withtag(self.selected_node_id)
+            for item_id in items_to_unhighlight:
+                item_type = self.canvas.type(item_id)
+                if item_type == 'oval':
+                    self.canvas.itemconfig(item_id, fill=NODE_COLOR)
+                elif item_type == 'text':
+                    self.canvas.itemconfig(item_id, fill=TEXT_COLOR) # テキストの色を元に戻す
 
         self.selected_node_id = node_id
         
         # 新しく選択されたノードをハイライト
         if self.selected_node_id:
-            item = self.canvas.find_withtag(self.selected_node_id)
-            if item:
-                self.canvas.itemconfig(item, fill=NODE_HIGHLIGHT_COLOR)
+            items_to_highlight = self.canvas.find_withtag(self.selected_node_id)
+            for item_id in items_to_highlight:
+                item_type = self.canvas.type(item_id)
+                if item_type == 'oval':
+                    self.canvas.itemconfig(item_id, fill=NODE_HIGHLIGHT_COLOR)
+                elif item_type == 'text':
+                    self.canvas.itemconfig(item_id, fill=NODE_HIGHLIGHT_COLOR) # テキストの色もハイライト色にする
             self.status_label.config(text=f"選択中: {self.selected_node_id}")
             self.edit_menu.entryconfig("選択中の国家方針を編集", state=tk.NORMAL)
             self.edit_menu.entryconfig("選択中の国家方針を削除", state=tk.NORMAL)
@@ -488,15 +497,9 @@ class FocusTreeApp:
 
     def add_focus_node_at_clicked_position(self):
         """右クリックされた座標に新しい国家方針を作成する"""
-        # キャンバス座標を論理座標に変換
-        # canvasx/canvasyはスクロールやズームを考慮した内部座標を返す
-        logical_x_px = self.canvas.canvasx(self.last_right_click_canvas_x)
-        logical_y_px = self.canvas.canvasy(self.last_right_click_canvas_y)
-
-        # 論理座標をグリッド座標に変換 (GRID_SIZEで割る)
-        # HoI4のx, yは整数なので、round()で丸める
-        initial_x = round(logical_x_px / GRID_SIZE)
-        initial_y = round(logical_y_px / GRID_SIZE)
+        # last_right_click_canvas_x/y は既に論理座標なので、そのまま使用
+        initial_x = round(self.last_right_click_canvas_x / GRID_SIZE)
+        initial_y = round(self.last_right_click_canvas_y / GRID_SIZE)
 
         editor = FocusEditorWindow(self.root, existing_ids=list(self.focus_nodes.keys()),
                                    initial_x=initial_x, initial_y=initial_y)
@@ -669,7 +672,8 @@ class FocusTreeApp:
             self.canvas.create_oval(x0, y0, x1, y1, fill=fill_color, outline="black", width=2 * self.zoom_level, tags=("node", node_id))
             # テキストのフォントサイズもズームレベルに応じて調整
             font_size = max(6, int(8 * self.zoom_level)) # 最小フォントサイズを設定
-            self.canvas.create_text(scaled_x, scaled_y + scaled_radius + 10 * self.zoom_level, text=node_id, fill=TEXT_COLOR, font=("Arial", font_size))
+            # テキストにも同じタグを付与することで、クリック検出を改善
+            self.canvas.create_text(scaled_x, scaled_y + scaled_radius + 10 * self.zoom_level, text=node_id, fill=TEXT_COLOR, font=("Arial", font_size), tags=("node", node_id))
 
     def _generate_script_string(self):
         """Hoi4スクリプト文字列を生成する内部メソッド"""

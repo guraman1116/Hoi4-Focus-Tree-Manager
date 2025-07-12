@@ -267,6 +267,7 @@ class FocusTreeApp:
         self.create_menu()
         self.create_widgets()
         self.create_context_menus() # コンテキストメニューを作成
+        self.bind_keyboard_events() # キーボードイベントをバインド
 
         self.draw_tree()
 
@@ -359,6 +360,38 @@ class FocusTreeApp:
         self.canvas_context_menu = tk.Menu(self.root, tearoff=0)
         self.canvas_context_menu.add_command(label="国家方針を追加", command=self.add_focus_node_at_clicked_position)
 
+    def bind_keyboard_events(self):
+        """キーボードイベントをバインドする"""
+        self.root.bind("<Left>", self.on_arrow_key_press)
+        self.root.bind("<Right>", self.on_arrow_key_press)
+        self.root.bind("<Up>", self.on_arrow_key_press)
+        self.root.bind("<Down>", self.on_arrow_key_press)
+
+    def on_arrow_key_press(self, event):
+        """矢印キーが押されたときの処理"""
+        if not self.selected_node_id:
+            return # ノードが選択されていない場合は何もしない
+
+        selected_node = self.focus_nodes[self.selected_node_id]
+        
+        moved = False
+        if event.keysym == "Left":
+            selected_node.x -= 1
+            moved = True
+        elif event.keysym == "Right":
+            selected_node.x += 1
+            moved = True
+        elif event.keysym == "Up":
+            selected_node.y -= 1
+            moved = True
+        elif event.keysym == "Down":
+            selected_node.y += 1
+            moved = True
+        
+        if moved:
+            self.draw_tree()
+            self.is_dirty = True # 変更があったことをマーク
+
 
     def on_mouse_wheel(self, event):
         """マウスホイールによるズームイン・アウト"""
@@ -379,7 +412,11 @@ class FocusTreeApp:
         self.canvas.scan_mark(event.x, event.y)
         
         # クリックされたアイテムを特定
-        clicked_items = self.canvas.find_overlapping(event.x - 1, event.y - 1, event.x + 1, event.y + 1)
+        # event.x, event.y はウィンドウ座標なので、canvasx/canvasyで論理座標に変換
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
+        
+        clicked_items = self.canvas.find_overlapping(canvas_x - 1, canvas_y - 1, canvas_x + 1, canvas_y + 1)
         node_id = None
         for item in clicked_items:
             tags = self.canvas.gettags(item)
@@ -942,7 +979,7 @@ class FocusTreeApp:
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(script_string)
-            self.status_label.config(text=f"TXTファイルにエクスポートしました: {filepath}")
+            self.status_label.config(text=f"TXTファイルにエクスportしました: {filepath}")
             # エクスポートは保存ではないので dirty フラグは変更しない
             # self.is_dirty = False # エクスポートは保存ではないので状態は変更しない
         except Exception as e:

@@ -186,15 +186,32 @@ class CanvasIDSelectorWindow(Toplevel):
             for prereq_id in node.prerequisite:
                 if prereq_id in self.focus_nodes:
                     prereq_node = self.focus_nodes[prereq_id]
-                    x1_scaled = prereq_node.abs_x * self.zoom_level
-                    y1_scaled = prereq_node.abs_y * self.zoom_level
-                    x2_scaled = node.abs_x * self.zoom_level
-                    y2_scaled = node.abs_y * self.zoom_level
+                    
+                    # 親ノードの下端から出る座標
+                    x1_start = prereq_node.abs_x * self.zoom_level
+                    y1_start = (prereq_node.abs_y + NODE_RADIUS) * self.zoom_level
+
+                    # 子ノードの上端に到達する座標
+                    x2_end = node.abs_x * self.zoom_level
+                    y2_end = (node.abs_y - NODE_RADIUS) * self.zoom_level
+
+                    # 中間点 (X軸移動後、Y軸移動)
+                    # 親ノードのY座標から少し下がり、子ノードのX座標まで水平に移動し、その後子ノードのY座標まで垂直に移動
+                    # 中間点のY座標は、親ノードの下端Y座標 + 余裕 (例: 20ピクセル)
+                    # または、親ノードと子ノードのY座標の中間点を使うこともできる
+                    mid_y_offset = 20 * self.zoom_level # 矢印がノードから少し離れるようにするオフセット
+                    mid_y = max(y1_start + mid_y_offset, y2_end) # 子ノードより上に中間点が行かないように調整
+
+                    points = [
+                        x1_start, y1_start, # 親ノードの下端
+                        x1_start, mid_y,    # 親ノードの下からY軸方向に移動
+                        x2_end, mid_y,      # X軸方向に移動
+                        x2_end, y2_end      # 子ノードの上端までY軸方向に移動
+                    ]
 
                     self.canvas.create_line(
-                        x1_scaled, y1_scaled,
-                        x2_scaled, y2_scaled,
-                        fill=ARROW_COLOR, width=2 * self.zoom_level, arrow=tk.LAST
+                        points,
+                        fill=ARROW_COLOR, width=2 * self.zoom_level, arrow=tk.LAST, smooth=False # smooth=Falseで折れ線に
                     )
 
         # 2. 国家方針ノードを描画
@@ -1049,16 +1066,32 @@ class FocusTreeApp:
             for prereq_id in node.prerequisite:
                 if prereq_id in self.focus_nodes:
                     prereq_node = self.focus_nodes[prereq_id]
-                    # ズームレベルを適用して座標を計算
-                    x1_scaled = prereq_node.abs_x * self.zoom_level
-                    y1_scaled = prereq_node.abs_y * self.zoom_level
-                    x2_scaled = node.abs_x * self.zoom_level
-                    y2_scaled = node.abs_y * self.zoom_level
+                    
+                    # 親ノードの下端から出る座標
+                    x1_start = prereq_node.abs_x * self.zoom_level
+                    y1_start = (prereq_node.abs_y + NODE_RADIUS) * self.zoom_level
+
+                    # 子ノードの上端に到達する座標
+                    x2_end = node.abs_x * self.zoom_level
+                    y2_end = (node.abs_y - NODE_RADIUS) * self.zoom_level
+
+                    # 中間点 (X軸移動後、Y軸移動)
+                    # 親ノードのY座標から少し下がり、子ノードのX座標まで水平に移動し、その後子ノードのY座標まで垂直に移動
+                    # 中間点のY座標は、親ノードの下端Y座標 + 余裕 (例: 20ピクセル)
+                    # または、親ノードと子ノードのY座標の中間点を使うこともできる
+                    mid_y_offset = 20 * self.zoom_level # 矢印がノードから少し離れるようにするオフセット
+                    mid_y = max(y1_start + mid_y_offset, y2_end) # 子ノードより上に中間点が行かないように調整
+
+                    points = [
+                        x1_start, y1_start, # 親ノードの下端
+                        x1_start, mid_y,    # 親ノードの下からY軸方向に移動
+                        x2_end, mid_y,      # X軸方向に移動
+                        x2_end, y2_end      # 子ノードの上端までY軸方向に移動
+                    ]
 
                     self.canvas.create_line(
-                        x1_scaled, y1_scaled,
-                        x2_scaled, y2_scaled,
-                        fill=ARROW_COLOR, width=2 * self.zoom_level, arrow=tk.LAST
+                        points,
+                        fill=ARROW_COLOR, width=2 * self.zoom_level, arrow=tk.LAST, smooth=False # smooth=Falseで折れ線に
                     )
 
         # 2. 国家方針ノードを描画 (線の上に描画するため後から)

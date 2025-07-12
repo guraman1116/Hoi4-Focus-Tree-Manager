@@ -5,7 +5,7 @@ import re
 
 # --- 定数定義 ---
 GRID_SIZE = 240  # キャンバス上のグリッドサイズ
-NODE_RADIUS = 15 # 国家方針を表す円の半径
+NODE_RADIUS = 30 # 国家方針を表す円の半径
 ARROW_COLOR = "#333333"
 NODE_COLOR = "#CCCCCC"
 NODE_HIGHLIGHT_COLOR = "#AADDFF"
@@ -20,6 +20,7 @@ class FocusNode:
         self.prerequisite = data.get("prerequisite", [])
         self.relative_position_id = data.get("relative_position_id", None)
         self.cost = data.get("cost", 10)
+        # x, y は offset の値が加算された最終的な位置
         self.x = data.get("x", 0)
         self.y = data.get("y", 0)
         self.completion_reward = data.get("completion_reward", "{\n\t\t\t\n\t\t}")
@@ -50,6 +51,10 @@ class FocusNode:
         lines.append(f"\t\tcost = {self.cost}")
 
         # 前提条件のフォーマット
+        # ここでは、すべての前提条件を単一のprerequisiteブロックにまとめる
+        # HoI4のフォーマットでは複数のprerequisiteブロックはAND条件だが、
+        # ツール内部ではフラットなリストとして扱い、エクスポート時に単一ブロックにまとめる
+        # (これにより、ツールで編集した際にAND/ORの区別が失われる可能性がある点に注意)
         if self.prerequisite:
             if len(self.prerequisite) == 1:
                 lines.append(f"\t\tprerequisite = {{ focus = {self.prerequisite[0]} }}")
@@ -62,6 +67,7 @@ class FocusNode:
         if self.relative_position_id:
             lines.append(f"\t\trelative_position_id = {self.relative_position_id}")
 
+        # ここでは元のx, yをそのまま出力（offsetは内部で処理済みのため）
         lines.append(f"\t\tx = {self.x}")
         lines.append(f"\t\ty = {self.y}")
 
@@ -592,77 +598,115 @@ class FocusTreeApp:
 
     def _parse_focus_block(self, block_text):
         """単一の focus = { ... } ブロックの内部を解析する"""
-        data = {'prerequisite': []}
-        inner_text = block_text
+        data = {
+            'prerequisite': [],
+            'x': 0, # Base x
+            'y': 0, # Base y
+            'completion_reward': '{ }',
+            'icon': 'GFX_focus_generic_question_mark' # Default icon
+        }
 
-        # ネストされたブロック（completion_reward, prerequisite）を先に見つけて処理する
-        # これにより、単純なキー=値の解析が容易になる
-        patterns_to_extract = ['completion_reward', 'prerequisite']
-        extracted_blocks = {}
+        # ブロック内のコメントを削除
+        current_text = re.sub(r'#.*', '', block_text)
 
-        for key in patterns_to_extract:
-            match = re.search(fr'\b{key}\s*=\s*\{{', inner_text)
-            if match:
-                start_brace_idx = match.end() - 1
-                end_brace_idx = self._find_matching_brace(inner_text, start_brace_idx)
-                if end_brace_idx != -1:
-                    # ブロック全体を保存
-                    extracted_blocks[key] = inner_text[match.start():end_brace_idx + 1]
-                    # 解析済みのブロックを一時的に削除
-                    inner_text = inner_text[:match.start()] + inner_text[end_brace_idx + 1:]
+        # --- offset ブロックの解析 ---
+        offset_x = 0
+        offset_y = 0
+        offset_match = re.search(r'\boffset\s*=\s*\{([\s\S]*?)\}', current_text)
+        if offset_match:
+            offset_content = offset_match.group(1)
+            offset_x_match = re.search(r'x\s*=\s*(-?\d+)', offset_content)
+            offset_y_match = re.search(r'y\s*=\s*(-?\d+)', offset_content)
+            offset_x = int(offset_x_match.group(1)) if offset_x_match else 0
+            offset_y = int(offset_y_match.group(1)) if offset_y_match else 0
+            # Remove the offset block from current_text
+            current_text = current_text[:offset_match.start()] + current_text[offset_match.end():]
 
-        # ブロックの内容を解析
-        if 'completion_reward' in extracted_blocks:
-            content_match = re.search(r'\{([\s\S]*)\}', extracted_blocks['completion_reward'])
-            if content_match:
-                data['completion_reward'] = "{\n" + content_match.group(1).strip() + "\n\t\t}"
-        
-        if 'prerequisite' in extracted_blocks:
-            content_match = re.search(r'\{([\s\S]*)\}', extracted_blocks['prerequisite'])
-            if content_match:
-                focuses = re.findall(r'focus\s*=\s*(\w+)', content_match.group(1))
-                data['prerequisite'] = focuses
+        # --- completion_reward ブロックの解析 ---
+        completion_reward_match = re.search(r'\bcompletion_reward\s*=\s*\{([\s\S]*?)\}', current_text)
+        if completion_reward_match:
+            data['completion_reward'] = "{\n" + completion_reward_match.group(1).strip() + "\n\t\t}"
+            # Remove the completion_reward block from current_text
+            current_text = current_text[:completion_reward_match.start()] + current_text[completion_reward_match.end():]
 
-        # 残りの単純なキー=値ペアを解析
-        for line in inner_text.split('\n'):
+        # --- すべての prerequisite ブロックの解析 ---
+        all_prerequisites = []
+        # Find all prerequisite blocks and remove them from current_text
+        # Iterate in reverse to avoid index issues when removing
+        prereq_matches = list(re.finditer(r'\bprerequisite\s*=\s*\{([\s\S]*?)\}', current_text))
+        for match in reversed(prereq_matches):
+            prereq_content = match.group(1)
+            focuses = re.findall(r'focus\s*=\s*(\w+)', prereq_content)
+            all_prerequisites.extend(focuses)
+            current_text = current_text[:match.start()] + current_text[match.end():]
+        data['prerequisite'] = list(set(all_prerequisites)) # 重複を削除
+
+        # --- 単純なキー=値ペアの解析 (id, icon, cost, x, y, relative_position_id) ---
+        # Now current_text should only contain top-level key-value pairs
+        for line in current_text.split('\n'):
             line = line.strip()
-            if not line: continue
+            # Skip empty lines or lines that might contain stray braces from removed blocks
+            if not line or '{' in line or '}' in line:
+                continue
+            
             parts = line.split('=')
             if len(parts) == 2:
                 key = parts[0].strip()
                 value = parts[1].strip()
-                if key in ['id', 'icon', 'relative_position_id']:
-                    data[key] = value
-                elif key in ['cost', 'x', 'y']:
-                    data[key] = int(value)
+                if key == 'id':
+                    data['id'] = value
+                elif key == 'icon':
+                    data['icon'] = value
+                elif key == 'relative_position_id':
+                    data['relative_position_id'] = value
+                elif key == 'cost':
+                    try:
+                        data['cost'] = int(value)
+                    except ValueError:
+                        pass
+                elif key == 'x':
+                    try:
+                        data['x'] = int(value) # This is the base x coordinate
+                    except ValueError:
+                        pass
+                elif key == 'y':
+                    try:
+                        data['y'] = int(value) # This is the base y coordinate
+                    except ValueError:
+                        pass
+        
+        # 基準のx, y座標にoffsetを加算して最終的な座標とする
+        data['x'] += offset_x
+        data['y'] += offset_y
         
         return data if 'id' in data else None
 
     def _parse_hoi4_txt(self, text_content):
         """Hoi4の.txtファイルの内容全体を解析する"""
-        # コメントを削除
+        # ファイル全体のコメントを削除
         text_content = re.sub(r'#.*', '', text_content)
         
         nodes = {}
         cursor = 0
         while True:
+            # focus = { ブロックの開始を検索
             match = re.search(r'\bfocus\s*=\s*\{', text_content[cursor:])
             if not match:
                 break
             
-            start_brace = cursor + match.end() - 1
+            start_brace = cursor + match.end() - 1 # '{' の位置
             end_brace = self._find_matching_brace(text_content, start_brace)
             
             if end_brace == -1:
                 messagebox.showwarning("解析エラー", "対応する波括弧が見つかりませんでした。ファイルが破損している可能性があります。")
                 break
             
-            block_content = text_content[start_brace + 1 : end_brace]
+            block_content = text_content[start_brace + 1 : end_brace] # focusブロックの中身
             node_data = self._parse_focus_block(block_content)
-            if node_data:
+            if node_data and 'id' in node_data: # idが存在することを確認
                 nodes[node_data['id']] = FocusNode(node_data)
             
-            cursor = end_brace + 1
+            cursor = end_brace + 1 # 次の検索開始位置を更新
             
         return nodes
 

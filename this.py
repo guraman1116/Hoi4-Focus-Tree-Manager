@@ -4,7 +4,7 @@ import json
 import re
 
 # --- 定数定義 ---
-GRID_SIZE = 60  # キャンバス上のグリッドサイズ
+GRID_SIZE = 240  # キャンバス上のグリッドサイズ
 NODE_RADIUS = 15 # 国家方針を表す円の半径
 ARROW_COLOR = "#333333"
 NODE_COLOR = "#CCCCCC"
@@ -215,6 +215,7 @@ class FocusTreeApp:
 
         self.focus_nodes = {}  # {id: FocusNode}
         self.selected_node_id = None
+        self.zoom_level = 1.0 # ズームレベルの初期値
 
         self.create_menu()
         self.create_widgets()
@@ -280,8 +281,23 @@ class FocusTreeApp:
         self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
         self.canvas.bind("<Button-3>", self.on_canvas_right_click) # 右クリック
         self.canvas.bind("<Double-Button-1>", self.on_canvas_double_click) # ダブルクリック
+        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel) # マウスホイールイベント
 
         self.drag_data = {"x": 0, "y": 0, "item": None}
+
+    def on_mouse_wheel(self, event):
+        """マウスホイールによるズームイン・アウト"""
+        # Windows/Linuxではevent.deltaがホイールの回転量を示す
+        # macOSではevent.numが4(上)または5(下)を示す
+        if event.delta > 0 or event.num == 4: # ホイールアップ (ズームイン)
+            self.zoom_level *= 1.1
+        elif event.delta < 0 or event.num == 5: # ホイールダウン (ズームアウト)
+            self.zoom_level /= 1.1
+        
+        # ズームレベルの範囲を制限 (例: 0.1から5.0)
+        self.zoom_level = max(0.1, min(self.zoom_level, 5.0))
+        
+        self.draw_tree() # ツリーを再描画
 
     def on_canvas_click(self, event):
         """キャンバスのクリックイベント"""
@@ -448,23 +464,36 @@ class FocusTreeApp:
             for prereq_id in node.prerequisite:
                 if prereq_id in self.focus_nodes:
                     prereq_node = self.focus_nodes[prereq_id]
+                    # ズームレベルを適用して座標を計算
+                    x1_scaled = prereq_node.abs_x * self.zoom_level
+                    y1_scaled = prereq_node.abs_y * self.zoom_level
+                    x2_scaled = node.abs_x * self.zoom_level
+                    y2_scaled = node.abs_y * self.zoom_level
+
                     self.canvas.create_line(
-                        prereq_node.abs_x, prereq_node.abs_y,
-                        node.abs_x, node.abs_y,
-                        fill=ARROW_COLOR, width=2, arrow=tk.LAST
+                        x1_scaled, y1_scaled,
+                        x2_scaled, y2_scaled,
+                        fill=ARROW_COLOR, width=2 * self.zoom_level, arrow=tk.LAST
                     )
 
         # 2. 国家方針ノードを描画 (線の上に描画するため後から)
         for node_id, node in self.focus_nodes.items():
-            x0 = node.abs_x - NODE_RADIUS
-            y0 = node.abs_y - NODE_RADIUS
-            x1 = node.abs_x + NODE_RADIUS
-            y1 = node.abs_y + NODE_RADIUS
+            # ズームレベルを適用して座標と半径を計算
+            scaled_x = node.abs_x * self.zoom_level
+            scaled_y = node.abs_y * self.zoom_level
+            scaled_radius = NODE_RADIUS * self.zoom_level
+
+            x0 = scaled_x - scaled_radius
+            y0 = scaled_y - scaled_radius
+            x1 = scaled_x + scaled_radius
+            y1 = scaled_y + scaled_radius
             
             fill_color = NODE_HIGHLIGHT_COLOR if node_id == self.selected_node_id else NODE_COLOR
             
-            self.canvas.create_oval(x0, y0, x1, y1, fill=fill_color, outline="black", width=2, tags=("node", node_id))
-            self.canvas.create_text(node.abs_x, node.abs_y + NODE_RADIUS + 10, text=node_id, fill=TEXT_COLOR, font=("Arial", 8))
+            self.canvas.create_oval(x0, y0, x1, y1, fill=fill_color, outline="black", width=2 * self.zoom_level, tags=("node", node_id))
+            # テキストのフォントサイズもズームレベルに応じて調整
+            font_size = max(6, int(8 * self.zoom_level)) # 最小フォントサイズを設定
+            self.canvas.create_text(scaled_x, scaled_y + scaled_radius + 10 * self.zoom_level, text=node_id, fill=TEXT_COLOR, font=("Arial", font_size))
 
     def _generate_script_string(self):
         """Hoi4スクリプト文字列を生成する内部メソッド"""

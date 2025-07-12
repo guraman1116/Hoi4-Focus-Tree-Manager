@@ -27,6 +27,9 @@ class FocusNode:
         self.x = data.get("x", 0)
         self.y = data.get("y", 0)
         self.completion_reward = data.get("completion_reward", "{\n\t\t\t\n\t\t}")
+        # ローカリゼーション用に追加
+        self.name = data.get("name", "")
+        self.description = data.get("description", "")
 
         # 描画用の絶対座標
         self.abs_x = 0
@@ -43,6 +46,8 @@ class FocusNode:
             "x": self.x,
             "y": self.y,
             "completion_reward": self.completion_reward,
+            "name": self.name,        # ローカリゼーション用
+            "description": self.description, # ローカリゼーション用
         }
 
     def to_hoi4_format(self):
@@ -218,7 +223,10 @@ class CanvasIDSelectorWindow(Toplevel):
             
             self.canvas.create_oval(x0, y0, x1, y1, fill=fill_color, outline="black", width=2 * self.zoom_level, tags=("node", node_id))
             font_size = max(6, int(8 * self.zoom_level))
-            self.canvas.create_text(scaled_x, scaled_y + scaled_radius + 10 * self.zoom_level, text=node_id, fill=text_color, font=("Arial", font_size), tags=("node", node_id))
+            
+            # キャンバスに表示するテキストをローカリゼーションから取得、なければID
+            display_text = node.name if node.name else node_id
+            self.canvas.create_text(scaled_x, scaled_y + scaled_radius + 10 * self.zoom_level, text=display_text, fill=text_color, font=("Arial", font_size), tags=("node", node_id))
 
     def on_canvas_click(self, event):
         """キャンバスクリックでノードを選択"""
@@ -298,7 +306,7 @@ class FocusEditorWindow(Toplevel):
         self.initial_y = initial_y
 
         self.title("国家方針の編集" if focus_node else "新規国家方針の作成")
-        self.geometry("600x700")
+        # self.geometry("600x700") # 固定サイズを削除
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
         self.result = None
@@ -315,6 +323,11 @@ class FocusEditorWindow(Toplevel):
         
         # ウィンドウが閉じられるときに一時ファイルをクリーンアップ
         self.protocol("WM_DELETE_WINDOW", self._on_closing_editor_window)
+
+        # ウィジェット作成後にウィンドウサイズを自動調整
+        self.update_idletasks()
+        self.geometry(f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}")
+
 
     def create_widgets(self):
         """ウィジェットを作成し配置する"""
@@ -396,21 +409,36 @@ class FocusEditorWindow(Toplevel):
         self.prereq_inner_frame.update_idletasks()
         self.prereq_canvas.config(scrollregion=self.prereq_canvas.bbox("all"))
 
+        # --- ローカリゼーション (名称) ---
+        ttk.Label(main_frame, text="名称 (name):").grid(row=8, column=0, sticky="w", pady=2)
+        self.name_var = tk.StringVar()
+        self.name_entry = ttk.Entry(main_frame, textvariable=self.name_var)
+        self.name_entry.grid(row=8, column=1, columnspan=2, sticky="ew", pady=2)
+
+        # --- ローカリゼーション (説明) ---
+        ttk.Label(main_frame, text="説明 (description):").grid(row=9, column=0, sticky="w", pady=2)
+        self.description_text = tk.Text(main_frame, height=5, wrap=tk.WORD)
+        self.description_text.grid(row=9, column=1, columnspan=2, sticky="nsew", pady=2)
+        desc_scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.description_text.yview)
+        desc_scrollbar.grid(row=9, column=3, sticky="ns")
+        self.description_text.config(yscrollcommand=desc_scrollbar.set)
+        main_frame.rowconfigure(9, weight=1) # 説明欄が拡張できるように設定
+
         # --- Completion Reward ---
         reward_label_frame = ttk.Frame(main_frame)
-        reward_label_frame.grid(row=6, column=0, sticky="w", pady=5)
+        reward_label_frame.grid(row=10, column=0, sticky="w", pady=5)
         ttk.Label(reward_label_frame, text="達成時効果 (completion_reward):").pack(side=tk.LEFT)
         ttk.Button(reward_label_frame, text="外部エディタで編集", command=self._open_external_editor).pack(side=tk.LEFT, padx=5)
 
         reward_frame = ttk.Frame(main_frame)
-        reward_frame.grid(row=7, column=0, columnspan=3, sticky="nsew")
+        reward_frame.grid(row=11, column=0, columnspan=3, sticky="nsew")
         self.reward_text = tk.Text(reward_frame, height=10, wrap=tk.WORD)
         self.reward_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         reward_scrollbar = ttk.Scrollbar(reward_frame, orient=tk.VERTICAL, command=self.reward_text.yview)
         reward_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.reward_text.config(yscrollcommand=reward_scrollbar.set)
 
-        main_frame.rowconfigure(7, weight=1)
+        main_frame.rowconfigure(11, weight=1)
         main_frame.columnconfigure(1, weight=1)
 
         # --- Buttons ---
@@ -427,6 +455,10 @@ class FocusEditorWindow(Toplevel):
         self.x_var.set(self.focus_node.x)
         self.y_var.set(self.focus_node.y)
         self.reward_text.insert("1.0", self.focus_node.completion_reward)
+        # ローカリゼーションデータを読み込む
+        self.name_var.set(self.focus_node.name)
+        self.description_text.insert("1.0", self.focus_node.description)
+
 
         # 前提条件の選択状態を復元 (チェックボックス用)
         for fid, var in self.prereq_vars.items():
@@ -460,7 +492,9 @@ class FocusEditorWindow(Toplevel):
             "x": self.x_var.get(),
             "y": self.y_var.get(),
             "prerequisite": prerequisites,
-            "completion_reward": self.reward_text.get("1.0", tk.END).strip()
+            "completion_reward": self.reward_text.get("1.0", tk.END).strip(),
+            "name": self.name_var.get().strip(), # ローカリゼーションを保存
+            "description": self.description_text.get("1.0", tk.END).strip() # ローカリゼーションを保存
         }
         self.result = data
         self.destroy()
@@ -627,6 +661,7 @@ class FocusTreeApp:
         file_menu.add_separator()
         file_menu.add_command(label="インポート (Hoi4 .txt)...", command=self.import_hoi4_txt)
         file_menu.add_command(label="エクスポート (Hoi4 .txt)...", command=self.export_hoi4_txt)
+        file_menu.add_command(label="エクスポート (ローカリゼーション)...", command=self.export_localization_file) # 追加
         file_menu.add_separator()
         file_menu.add_command(label="終了", command=self.root.quit)
 
@@ -831,7 +866,12 @@ class FocusTreeApp:
                     self.canvas.itemconfig(item_id, fill=NODE_HIGHLIGHT_COLOR)
                 elif item_type == 'text':
                     self.canvas.itemconfig(item_id, fill=NODE_HIGHLIGHT_COLOR) # テキストの色もハイライト色にする
-            self.status_label.config(text=f"選択中: {self.selected_node_id}")
+            
+            # 選択中のノードの表示テキストを更新
+            selected_node = self.focus_nodes[self.selected_node_id]
+            display_text = selected_node.name if selected_node.name else selected_node.id
+            self.status_label.config(text=f"選択中: {display_text}")
+
             self.edit_menu.entryconfig("選択中の国家方針を編集", state=tk.NORMAL)
             self.edit_menu.entryconfig("選択中の国家方針を削除", state=tk.NORMAL)
             # ノード用コンテキストメニューの項目も有効化
@@ -1038,8 +1078,10 @@ class FocusTreeApp:
             self.canvas.create_oval(x0, y0, x1, y1, fill=fill_color, outline="black", width=2 * self.zoom_level, tags=("node", node_id))
             # テキストのフォントサイズもズームレベルに応じて調整
             font_size = max(6, int(8 * self.zoom_level)) # 最小フォントサイズを設定
-            # テキストにも同じタグを付与することで、クリック検出を改善
-            self.canvas.create_text(scaled_x, scaled_y + scaled_radius + 10 * self.zoom_level, text=node_id, fill=TEXT_COLOR, font=("Arial", font_size), tags=("node", node_id))
+            
+            # キャンバスに表示するテキストをローカリゼーションから取得、なければID
+            display_text = node.name if node.name else node_id
+            self.canvas.create_text(scaled_x, scaled_y + scaled_radius + 10 * self.zoom_level, text=display_text, fill=TEXT_COLOR, font=("Arial", font_size), tags=("node", node_id))
 
     def _generate_script_string(self):
         """Hoi4スクリプト文字列を生成する内部メソッド"""
@@ -1130,7 +1172,7 @@ class FocusTreeApp:
             self.status_label.config(text=f"ファイルを開きました: {filepath}")
             self.is_dirty = False # ファイルを開いたので状態をクリーンに
         except Exception as e:
-            messagebox.showerror("読み込みエラー", f"ファイルの読み込み中にエラーが発生しました:\n{e}")
+            messagebox.showerror("読み込みエラー", f"ファイルの読み込み中にエラーがいっぱい発生しました:\n{e}")
 
     # --- .txt インポート/エクスポート機能 ---
 
@@ -1153,7 +1195,9 @@ class FocusTreeApp:
             'x': 0, # Base x
             'y': 0, # Base y
             'completion_reward': '{ }',
-            'icon': 'GFX_focus_generic_question_mark' # Default icon
+            'icon': 'GFX_focus_generic_question_mark', # Default icon
+            'name': '', # ローカリゼーション用デフォルト値
+            'description': '' # ローカリゼーション用デフォルト値
         }
 
         # ブロック内のコメントを削除
@@ -1313,6 +1357,39 @@ class FocusTreeApp:
             # self.is_dirty = False # エクスポートは保存ではないので状態は変更しない
         except Exception as e:
             messagebox.showerror("エクスポートエラー", f"ファイルの保存中にエラーが発生しました:\n{e}")
+
+    def export_localization_file(self):
+        """現在のツリーからローカリゼーションファイルを生成する"""
+        if not self.focus_nodes:
+            messagebox.showinfo("情報", "エクスポートする国家方針がありません。")
+            return
+
+        filepath = filedialog.asksaveasfilename(
+            title="ローカリゼーションファイルを保存",
+            defaultextension=".yml", # 通常のローカリゼーションファイルは.yml
+            filetypes=[("YAML Files", "*.yml"), ("All Files", "*.*")]
+        )
+        if not filepath:
+            return
+
+        localization_content = "l_japanese:\n"
+        # ノードをIDでソートして出力順を安定させる
+        sorted_nodes = sorted(self.focus_nodes.values(), key=lambda n: n.id)
+        for node in sorted_nodes:
+            # 各行の先頭に半角スペースを忘れずに追加
+            # 名称と説明が存在すればそれを使用し、なければ空の文字列
+            node_name = node.name if node.name else ""
+            node_desc = node.description if node.description else ""
+            localization_content += f" JAP_{node.id}: \"{node_name}\"\n"
+            localization_content += f" JAP_{node.id}_desc: \"{node_desc}\"\n"
+        
+        try:
+            # UTF-8 BOM付きで保存 (HoI4のローカリゼーションファイルの一般的な形式)
+            with open(filepath, 'w', encoding='utf-8-sig') as f:
+                f.write(localization_content)
+            self.status_label.config(text=f"ローカリゼーションファイルをエクスポートしました: {filepath}")
+        except Exception as e:
+            messagebox.showerror("エクスポートエラー", f"ローカリゼーションファイルの保存中にエラーが発生しました:\n{e}")
 
 
 if __name__ == "__main__":

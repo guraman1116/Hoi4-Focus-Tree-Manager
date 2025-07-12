@@ -2,6 +2,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, Toplevel, filedialog
 import json
 import re
+import os # osモジュールをインポート
+import tempfile # tempfileモジュールをインポート
+import subprocess # subprocessモジュールをインポート
 
 # --- 定数定義 ---
 GRID_SIZE = 240  # キャンバス上のグリッドサイズ
@@ -300,6 +303,8 @@ class FocusEditorWindow(Toplevel):
 
         self.result = None
         self.prereq_vars = {} # チェックボックスのBooleanVarを格納する辞書
+        self.temp_reward_filepath = None # 一時ファイルのパス
+        self.last_mod_time = None # 一時ファイルの最終更新日時
 
         self.create_widgets()
         if self.focus_node:
@@ -307,6 +312,9 @@ class FocusEditorWindow(Toplevel):
         else: # 新規作成の場合のみ初期座標をセット
             self.x_var.set(self.initial_x)
             self.y_var.set(self.initial_y)
+        
+        # ウィンドウが閉じられるときに一時ファイルをクリーンアップ
+        self.protocol("WM_DELETE_WINDOW", self._on_closing_editor_window)
 
     def create_widgets(self):
         """ウィジェットを作成し配置する"""
@@ -389,7 +397,11 @@ class FocusEditorWindow(Toplevel):
         self.prereq_canvas.config(scrollregion=self.prereq_canvas.bbox("all"))
 
         # --- Completion Reward ---
-        ttk.Label(main_frame, text="達成時効果 (completion_reward):").grid(row=6, column=0, sticky="w", pady=5)
+        reward_label_frame = ttk.Frame(main_frame)
+        reward_label_frame.grid(row=6, column=0, sticky="w", pady=5)
+        ttk.Label(reward_label_frame, text="達成時効果 (completion_reward):").pack(side=tk.LEFT)
+        ttk.Button(reward_label_frame, text="外部エディタで編集", command=self._open_external_editor).pack(side=tk.LEFT, padx=5)
+
         reward_frame = ttk.Frame(main_frame)
         reward_frame.grid(row=7, column=0, columnspan=3, sticky="nsew")
         self.reward_text = tk.Text(reward_frame, height=10, wrap=tk.WORD)
@@ -425,6 +437,8 @@ class FocusEditorWindow(Toplevel):
 
     def save(self):
         """入力されたデータを検証して保存する"""
+        self._stop_monitoring_temp_file() # 保存前に監視を停止し、一時ファイルを削除
+        
         focus_id = self.id_var.get().strip()
         if not focus_id:
             messagebox.showerror("エラー", "IDは必須です。")
@@ -452,12 +466,17 @@ class FocusEditorWindow(Toplevel):
         self.destroy()
 
     def cancel(self):
+        self._stop_monitoring_temp_file() # キャンセル時も監視を停止し、一時ファイルを削除
         self.result = None
+        self.destroy()
+
+    def _on_closing_editor_window(self):
+        """エディタウィンドウが閉じられる際の処理"""
+        self._stop_monitoring_temp_file() # 監視を停止し、一時ファイルを削除
         self.destroy()
 
     def select_relative_id_from_canvas(self):
         """キャンバスからrelative_position_idを選択するモーダルを開く"""
-        # FocusTreeAppインスタンスを直接渡すように変更したため、それを使用
         selector = CanvasIDSelectorWindow(self, self.app_instance.focus_nodes, self.relative_id_var.get(), mode='single')
         self.wait_window(selector)
 
@@ -482,6 +501,79 @@ class FocusEditorWindow(Toplevel):
             for fid in selected_prerequisites:
                 if fid in self.prereq_vars: # 念のため存在チェック
                     self.prereq_vars[fid].set(True)
+
+    def _open_external_editor(self):
+        """completion_rewardの内容を一時ファイルに保存し、外部エディタで開く"""
+        current_reward_content = self.reward_text.get("1.0", tk.END).strip()
+
+        try:
+            # 一時ファイルを作成 (拡張子を.txtにすることでテキストエディタで開きやすくする)
+            fd, self.temp_reward_filepath = tempfile.mkstemp(suffix=".txt", prefix="hoi4_reward_")
+            with os.fdopen(fd, 'w', encoding='utf-8') as tmp_file:
+                tmp_file.write(current_reward_content)
+            
+            self.last_mod_time = os.path.getmtime(self.temp_reward_filepath)
+
+            # OSに応じた方法でファイルを開く
+            if os.name == 'nt': # Windows
+                os.startfile(self.temp_reward_filepath)
+            elif os.uname().sysname == 'Darwin': # macOS
+                subprocess.Popen(['open', self.temp_reward_filepath])
+            else: # Linux/Unix
+                subprocess.Popen(['xdg-open', self.temp_reward_filepath])
+            
+            messagebox.showinfo("外部エディタ", f"一時ファイル '{os.path.basename(self.temp_reward_filepath)}' を外部エディタで開きました。\n変更を保存すると自動的に反映されます。")
+            
+            # ファイル変更の監視を開始
+            self.after_id = self.after(1000, self._check_temp_file_for_changes)
+
+        except Exception as e:
+            messagebox.showerror("エラー", f"外部エディタを開けませんでした:\n{e}")
+            self._stop_monitoring_temp_file() # エラー時はクリーンアップ
+
+    def _check_temp_file_for_changes(self):
+        """一時ファイルの変更を監視し、変更があれば内容を読み込む"""
+        if self.temp_reward_filepath and os.path.exists(self.temp_reward_filepath):
+            try:
+                new_mod_time = os.path.getmtime(self.temp_reward_filepath)
+                if new_mod_time != self.last_mod_time:
+                    with open(self.temp_reward_filepath, 'r', encoding='utf-8') as tmp_file:
+                        updated_content = tmp_file.read()
+                    
+                    self.reward_text.delete("1.0", tk.END)
+                    self.reward_text.insert("1.0", updated_content)
+                    self.last_mod_time = new_mod_time
+                    self.app_instance.is_dirty = True # 外部からの変更もダーティフラグを立てる
+                    self.app_instance.status_label.config(text="外部エディタからの変更を反映しました。")
+            except Exception as e:
+                # ファイルがロックされている、削除されたなどのエラー
+                print(f"一時ファイルの読み込み中にエラー: {e}")
+                self._stop_monitoring_temp_file() # エラー時は監視を停止
+        else:
+            # ファイルが存在しない場合（外部エディタで削除されたなど）
+            self._stop_monitoring_temp_file()
+            messagebox.showinfo("外部エディタ", "一時ファイルが見つかりません。外部エディタでの編集を終了します。")
+
+        # 監視を継続
+        if hasattr(self, 'after_id') and self.after_id: # after_idが有効な場合のみ再スケジュール
+             self.after_id = self.after(1000, self._check_temp_file_for_changes)
+
+
+    def _stop_monitoring_temp_file(self):
+        """一時ファイルの監視を停止し、ファイルを削除する"""
+        if hasattr(self, 'after_id') and self.after_id:
+            self.after_cancel(self.after_id)
+            self.after_id = None
+        
+        if self.temp_reward_filepath and os.path.exists(self.temp_reward_filepath):
+            try:
+                os.remove(self.temp_reward_filepath)
+                print(f"一時ファイル {self.temp_reward_filepath} を削除しました。")
+            except Exception as e:
+                print(f"一時ファイルの削除中にエラー: {e}")
+            finally:
+                self.temp_reward_filepath = None
+                self.last_mod_time = None
 
 
 class FocusTreeApp:

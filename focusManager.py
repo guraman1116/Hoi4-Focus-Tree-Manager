@@ -83,13 +83,213 @@ class FocusNode:
         return "\n".join(lines)
 
 
-class FocusEditorWindow(Toplevel):
-    """国家方針の情報を編集するためのウィンドウ"""
-    def __init__(self, parent, focus_node=None, existing_ids=None, initial_x=0, initial_y=0):
+class CanvasIDSelectorWindow(Toplevel):
+    """キャンバス上で国家方針IDを選択するためのモーダルウィンドウ"""
+    def __init__(self, parent, focus_nodes, current_selected_ids=None, mode='single'):
         super().__init__(parent)
         self.parent = parent
+        self.focus_nodes = focus_nodes # FocusNodeオブジェクトの辞書
+        self.mode = mode # 'single' or 'multiple'
+        self.result = None # 最終的に返す選択されたID(s)
+
+        self.title("国家方針を選択")
+        self.geometry("800x600")
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+
+        self.zoom_level = 1.0 # このウィンドウ独自のズームレベル
+        
+        if self.mode == 'single':
+            self.selected_node_id_in_selector = current_selected_ids # 単一選択の場合
+            self.selected_node_ids_in_selector = [] # 複数選択の場合、空リスト
+        else: # 'multiple'
+            self.selected_node_id_in_selector = None # 単一選択の場合、None
+            self.selected_node_ids_in_selector = list(current_selected_ids) if current_selected_ids else [] # 複数選択の場合、初期値設定
+
+        self.create_widgets()
+        self.draw_tree()
+
+        # ドラッグ操作のためのデータ
+        self.drag_data = {"x": 0, "y": 0, "item": None}
+
+    def create_widgets(self):
+        """ウィジェットを作成し配置する"""
+        main_frame = ttk.Frame(self, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(main_frame, bg="white", scrollregion=(-2000, -2000, 2000, 2000))
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # スクロールバー
+        hbar = ttk.Scrollbar(main_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        hbar.pack(side=tk.BOTTOM, fill=tk.X)
+        vbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.canvas.config(xscrollcommand=hbar.set, yscrollcommand=vbar.set)
+        
+        # イベントバインド
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+        self.canvas.bind("<B1-Motion>", self.on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
+        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel) # マウスホイールイベント
+
+        # ボタンフレーム
+        button_frame = ttk.Frame(self)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Button(button_frame, text="OK", command=self.ok).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="キャンセル", command=self.cancel).pack(side=tk.RIGHT)
+
+    def calculate_positions(self):
+        """全ノードの絶対座標を計算する (セレクター用)"""
+        calculated_nodes = set()
+        
+        queue = []
+        for node in self.focus_nodes.values():
+            if not node.relative_position_id or node.relative_position_id not in self.focus_nodes:
+                node.abs_x = node.x * GRID_SIZE
+                node.abs_y = node.y * GRID_SIZE
+                calculated_nodes.add(node.id)
+                queue.append(node)
+
+        head = 0
+        while head < len(queue):
+            parent_node = queue[head]
+            head += 1
+            
+            for child_node in self.focus_nodes.values():
+                if child_node.relative_position_id == parent_node.id and child_node.id not in calculated_nodes:
+                    child_node.abs_x = parent_node.abs_x + child_node.x * GRID_SIZE
+                    child_node.abs_y = parent_node.abs_y + child_node.y * GRID_SIZE
+                    calculated_nodes.add(child_node.id)
+                    queue.append(child_node)
+        
+        for node in self.focus_nodes.values():
+            if node.id not in calculated_nodes:
+                 node.abs_x = node.x * GRID_SIZE
+                 node.abs_y = node.y * GRID_SIZE
+
+    def draw_tree(self):
+        """キャンバスにツリー全体を描画する (セレクター用)"""
+        self.canvas.delete("all")
+        self.calculate_positions()
+
+        # 1. 前提条件の線を描画
+        for node in self.focus_nodes.values():
+            for prereq_id in node.prerequisite:
+                if prereq_id in self.focus_nodes:
+                    prereq_node = self.focus_nodes[prereq_id]
+                    x1_scaled = prereq_node.abs_x * self.zoom_level
+                    y1_scaled = prereq_node.abs_y * self.zoom_level
+                    x2_scaled = node.abs_x * self.zoom_level
+                    y2_scaled = node.abs_y * self.zoom_level
+
+                    self.canvas.create_line(
+                        x1_scaled, y1_scaled,
+                        x2_scaled, y2_scaled,
+                        fill=ARROW_COLOR, width=2 * self.zoom_level, arrow=tk.LAST
+                    )
+
+        # 2. 国家方針ノードを描画
+        for node_id, node in self.focus_nodes.items():
+            scaled_x = node.abs_x * self.zoom_level
+            scaled_y = node.abs_y * self.zoom_level
+            scaled_radius = NODE_RADIUS * self.zoom_level
+
+            x0 = scaled_x - scaled_radius
+            y0 = scaled_y - scaled_radius
+            x1 = scaled_x + scaled_radius
+            y1 = scaled_y + scaled_radius
+            
+            # セレクター内で選択中のノードをハイライト
+            fill_color = NODE_COLOR
+            text_color = TEXT_COLOR
+
+            if self.mode == 'single':
+                if node_id == self.selected_node_id_in_selector:
+                    fill_color = NODE_HIGHLIGHT_COLOR
+                    text_color = NODE_HIGHLIGHT_COLOR
+            elif self.mode == 'multiple':
+                if node_id in self.selected_node_ids_in_selector:
+                    fill_color = NODE_HIGHLIGHT_COLOR
+                    text_color = NODE_HIGHLIGHT_COLOR
+            
+            self.canvas.create_oval(x0, y0, x1, y1, fill=fill_color, outline="black", width=2 * self.zoom_level, tags=("node", node_id))
+            font_size = max(6, int(8 * self.zoom_level))
+            self.canvas.create_text(scaled_x, scaled_y + scaled_radius + 10 * self.zoom_level, text=node_id, fill=text_color, font=("Arial", font_size), tags=("node", node_id))
+
+    def on_canvas_click(self, event):
+        """キャンバスクリックでノードを選択"""
+        # ドラッグ開始位置を記録 (スクロール用)
+        self.canvas.scan_mark(event.x, event.y)
+
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
+        
+        clicked_items = self.canvas.find_overlapping(canvas_x - 1, canvas_y - 1, canvas_x + 1, canvas_y + 1)
+        node_id = None
+        for item in clicked_items:
+            tags = self.canvas.gettags(item)
+            if "node" in tags:
+                node_id = tags[1]
+                break
+        
+        if node_id:
+            if self.mode == 'single':
+                self.selected_node_id_in_selector = node_id
+            elif self.mode == 'multiple':
+                if node_id in self.selected_node_ids_in_selector:
+                    self.selected_node_ids_in_selector.remove(node_id)
+                else:
+                    self.selected_node_ids_in_selector.append(node_id)
+            self.draw_tree() # ハイライトを更新
+        else:
+            if self.mode == 'single':
+                self.selected_node_id_in_selector = None # ノード以外をクリックしたら選択解除
+            # multipleモードでは、ノード以外をクリックしても選択状態は解除しない
+            self.draw_tree()
+
+
+    def on_canvas_drag(self, event):
+        """キャンバスのドラッグイベント（画面スクロール）"""
+        self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def on_canvas_release(self, event):
+        """ドラッグ終了"""
+        pass
+
+    def on_mouse_wheel(self, event):
+        """マウスホイールによるズームイン・アウト (セレクター用)"""
+        if event.delta > 0 or event.num == 4:
+            self.zoom_level *= 1.1
+        elif event.delta < 0 or event.num == 5:
+            self.zoom_level /= 1.1
+        self.zoom_level = max(0.1, min(self.zoom_level, 5.0))
+        self.draw_tree()
+
+    def ok(self):
+        """選択を確定してウィンドウを閉じる"""
+        if self.mode == 'single':
+            self.result = self.selected_node_id_in_selector
+        elif self.mode == 'multiple':
+            self.result = self.selected_node_ids_in_selector
+        self.destroy()
+
+    def cancel(self):
+        """選択をキャンセルしてウィンドウを閉じる"""
+        self.result = None
+        self.destroy()
+
+
+class FocusEditorWindow(Toplevel):
+    """国家方針の情報を編集するためのウィンドウ"""
+    # app_instance を追加
+    def __init__(self, parent, app_instance, focus_node=None, initial_x=0, initial_y=0):
+        super().__init__(parent)
+        self.parent = parent
+        self.app_instance = app_instance # FocusTreeAppのインスタンスを保存
         self.focus_node = focus_node
-        self.existing_ids = existing_ids if existing_ids else []
+        self.all_focus_nodes = app_instance.focus_nodes # app_instanceから取得
+        self.existing_ids = list(self.all_focus_nodes.keys()) # 既存IDリスト
         self.original_id = focus_node.id if focus_node else None
         self.initial_x = initial_x
         self.initial_y = initial_y
@@ -128,9 +328,12 @@ class FocusEditorWindow(Toplevel):
         # --- Relative Position ID ---
         ttk.Label(main_frame, text="相対位置の基準ID (relative_position_id):").grid(row=2, column=0, sticky="w", pady=2)
         self.relative_id_var = tk.StringVar()
-        relative_ids = [""] + [fid for fid in self.existing_ids if fid != self.original_id]
-        self.relative_id_combo = ttk.Combobox(main_frame, textvariable=self.relative_id_var, values=relative_ids)
-        self.relative_id_combo.grid(row=2, column=1, columnspan=2, sticky="ew", pady=2)
+        # existing_ids を使用してコンボボックスの値を設定
+        relative_ids_for_combo = [""] + [fid for fid in self.existing_ids if fid != self.original_id]
+        self.relative_id_combo = ttk.Combobox(main_frame, textvariable=self.relative_id_var, values=relative_ids_for_combo)
+        self.relative_id_combo.grid(row=2, column=1, sticky="ew", pady=2)
+        ttk.Button(main_frame, text="キャンバスから選択", command=self.select_relative_id_from_canvas).grid(row=2, column=2, sticky="w", pady=2, padx=5)
+
 
         # --- Position ---
         ttk.Label(main_frame, text="相対位置 (x, y):").grid(row=3, column=0, sticky="w", pady=2)
@@ -144,7 +347,10 @@ class FocusEditorWindow(Toplevel):
         ttk.Spinbox(pos_frame, from_=-50, to=50, textvariable=self.y_var, width=5).pack(side=tk.LEFT, padx=5)
 
         # --- Prerequisite (チェックボックス形式に変更) ---
-        ttk.Label(main_frame, text="前提条件 (prerequisite):").grid(row=4, column=0, sticky="w", pady=5)
+        prereq_label_frame = ttk.Frame(main_frame)
+        prereq_label_frame.grid(row=4, column=0, sticky="w", pady=5)
+        ttk.Label(prereq_label_frame, text="前提条件 (prerequisite):").pack(side=tk.LEFT)
+        ttk.Button(prereq_label_frame, text="キャンバスから選択", command=self.select_prerequisites_from_canvas).pack(side=tk.LEFT, padx=5)
         
         prereq_outer_frame = ttk.Frame(main_frame)
         prereq_outer_frame.grid(row=5, column=0, columnspan=3, sticky="nsew")
@@ -168,6 +374,7 @@ class FocusEditorWindow(Toplevel):
         # Canvas内にFrameを配置
         self.prereq_canvas.create_window((0, 0), window=self.prereq_inner_frame, anchor="nw")
 
+        # existing_ids を使用してチェックボックスを作成
         prereq_ids = [fid for fid in self.existing_ids if fid != self.original_id]
         prereq_ids.sort() # IDをソートして表示順を安定させる
 
@@ -247,6 +454,35 @@ class FocusEditorWindow(Toplevel):
     def cancel(self):
         self.result = None
         self.destroy()
+
+    def select_relative_id_from_canvas(self):
+        """キャンバスからrelative_position_idを選択するモーダルを開く"""
+        # FocusTreeAppインスタンスを直接渡すように変更したため、それを使用
+        selector = CanvasIDSelectorWindow(self, self.app_instance.focus_nodes, self.relative_id_var.get(), mode='single')
+        self.wait_window(selector)
+
+        if selector.result:
+            self.relative_id_var.set(selector.result)
+
+    def select_prerequisites_from_canvas(self):
+        """キャンバスから前提条件を選択するモーダルを開く"""
+        # 現在選択されている前提条件のリストを取得
+        current_prerequisites = [fid for fid, var in self.prereq_vars.items() if var.get()]
+        
+        # CanvasIDSelectorWindow を複数選択モードで開き、結果を待つ
+        selector = CanvasIDSelectorWindow(self, self.app_instance.focus_nodes, current_prerequisites, mode='multiple')
+        self.wait_window(selector)
+
+        if selector.result is not None: # OKが押された場合 (空リストも含む)
+            selected_prerequisites = selector.result
+            # 全てのチェックボックスの状態をリセット
+            for fid, var in self.prereq_vars.items():
+                var.set(False)
+            # 選択された前提条件に対応するチェックボックスをオンにする
+            for fid in selected_prerequisites:
+                if fid in self.prereq_vars: # 念のため存在チェック
+                    self.prereq_vars[fid].set(True)
+
 
 class FocusTreeApp:
     """アプリケーション本体のクラス"""
@@ -521,7 +757,8 @@ class FocusTreeApp:
     def add_focus_node(self):
         """国家方針追加ウィンドウを開く (ツールバーボタン用)"""
         # デフォルトのx, yは0で開く
-        editor = FocusEditorWindow(self.root, existing_ids=list(self.focus_nodes.keys()))
+        # FocusTreeAppのインスタンス (self) を渡す
+        editor = FocusEditorWindow(self.root, self, focus_node=None, initial_x=0, initial_y=0)
         self.root.wait_window(editor)
 
         if editor.result:
@@ -538,8 +775,8 @@ class FocusTreeApp:
         initial_x = round(self.last_right_click_canvas_x / GRID_SIZE)
         initial_y = round(self.last_right_click_canvas_y / GRID_SIZE)
 
-        editor = FocusEditorWindow(self.root, existing_ids=list(self.focus_nodes.keys()),
-                                   initial_x=initial_x, initial_y=initial_y)
+        # FocusTreeAppのインスタンス (self) を渡す
+        editor = FocusEditorWindow(self.root, self, focus_node=None, initial_x=initial_x, initial_y=initial_y)
         self.root.wait_window(editor)
 
         if editor.result:
@@ -557,8 +794,7 @@ class FocusTreeApp:
             return
         
         node_to_edit = self.focus_nodes[self.selected_node_id]
-        existing_ids = list(self.focus_nodes.keys())
-
+        
         # 編集前のノードの絶対座標を保存
         # calculate_positionsを呼び出すことで、最新のabs_x, abs_yが保証される
         self.calculate_positions() 
@@ -566,7 +802,8 @@ class FocusTreeApp:
         original_abs_y = node_to_edit.abs_y
         original_relative_position_id = node_to_edit.relative_position_id
         
-        editor = FocusEditorWindow(self.root, focus_node=node_to_edit, existing_ids=existing_ids)
+        # FocusTreeAppのインスタンス (self) を渡す
+        editor = FocusEditorWindow(self.root, self, focus_node=node_to_edit)
         self.root.wait_window(editor)
 
         if editor.result:

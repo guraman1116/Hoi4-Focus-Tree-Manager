@@ -8,7 +8,7 @@ import subprocess # subprocessモジュールをインポート
 
 # --- 定数定義 ---
 GRID_SIZE = 240  # キャンバス上のグリッドサイズ
-NODE_RADIUS = 30 # 国家方針を表す円の半径
+NODE_RADIUS = 100 # 国家方針を表す円の半径
 ARROW_COLOR = "#333333"
 NODE_COLOR = "#CCCCCC"
 NODE_HIGHLIGHT_COLOR = "#AADDFF"
@@ -1413,8 +1413,8 @@ class FocusTreeApp:
             # 名称と説明が存在すればそれを使用し、なければ空の文字列
             node_name = node.name if node.name else ""
             node_desc = node.description if node.description else ""
-            localization_content += f" JAP_{node.id}: \"{node_name}\"\n"
-            localization_content += f" JAP_{node.id}_desc: \"{node_desc}\"\n"
+            localization_content += f" {node.id}: \"{node_name}\"\n"
+            localization_content += f" {node.id}_desc: \"{node_desc}\"\n"
         
         try:
             # UTF-8 BOM付きで保存 (HoI4のローカリゼーションファイルの一般的な形式)

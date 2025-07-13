@@ -1,0 +1,33 @@
+{
+    "event_metadata": {
+        "namespace": "example_namespace",
+        "start_id": 1,
+        "end_id": 3,
+        "num_options": 2
+    },
+    "localization": {
+        "event_metadata": {
+            "namespace": "example_namespace",
+            "start_id": 1,
+            "end_id": 3,
+            "num_options": 2
+        },
+        "localization": {
+            "FT_JAP_parliament.1.t": "イベントタイトル",
+            "FT_JAP_parliament.1.d": "イベントの説明文",
+            "FT_JAP_parliament.1.a": "選択肢 A",
+            "example_namespace.1.t": "イベントタイトル",
+            "example_namespace.1.d": "イベントの説明文",
+            "example_namespace.1.a": "選択肢 A",
+            "example_namespace.1.b": "選択肢 B",
+            "example_namespace.2.t": "イベントタイトル",
+            "example_namespace.2.d": "イベントの説明文",
+            "example_namespace.2.a": "選択肢 A",
+            "example_namespace.2.b": "選択肢 B",
+            "example_namespace.3.t": "イベントタイトル",
+            "example_namespace.3.d": "イベントの説明文",
+            "example_namespace.3.a": "選択肢 A",
+            "example_namespace.3.b": "選択肢 B"
+        }
+    }
+}

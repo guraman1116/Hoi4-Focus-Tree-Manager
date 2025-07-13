@@ -1,0 +1,28 @@
+{
+    "JAP_AAA": {
+        "id": "JAP_AAA",
+        "icon": "GFX_focus_generic_question_mark",
+        "prerequisite": [],
+        "relative_position_id": null,
+        "cost": 10,
+        "x": 1,
+        "y": 1,
+        "completion_reward": "",
+        "name": "example_focus_name",
+        "description": "example_focus_desc"
+    },
+    "JAP_BBB": {
+        "id": "JAP_BBB",
+        "icon": "GFX_focus_generic_question_mark",
+        "prerequisite": [
+            "JAP_AAA"
+        ],
+        "relative_position_id": "JAP_AAA",
+        "cost": 10,
+        "x": 3,
+        "y": 2,
+        "completion_reward": "add_stability = 0.1",
+        "name": "example_focus_name_2",
+        "description": "example_focus_desc_2"
+    }
+}
